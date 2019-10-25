@@ -47,7 +47,7 @@ def _quant_param_to_str(val):
 
 def _enum_to_str(enum_val):
     # TODO: This can probably be removed
-    if isinstance(enum_val, str): # temporary fix
+    if isinstance(enum_val, str):  # temporary fix
         return enum_val
     return str(enum_val).split('.')[1]
 
@@ -138,7 +138,7 @@ def _get_quant_params_from_tensor(tensor, num_bits, mode, clip=ClipMode.NONE, pe
         zp = zp.view(dims)
 
     if scale_approx_mult_bits is not None:
-        scale = approx_scale_as_mult_and_shift(scale, scale_approx_mult_bits)
+        scale, _, _ = approx_scale_as_mult_and_shift(scale, scale_approx_mult_bits)
 
     return scale, zp
 
@@ -174,7 +174,7 @@ def _get_quant_params_from_stats_dict(stats, num_bits, mode, clip=ClipMode.NONE,
         scale, zp = asymmetric_linear_quantization_params(num_bits, sat_min, sat_max, signed=signed)
 
     if scale_approx_mult_bits is not None:
-        scale = approx_scale_as_mult_and_shift(scale, scale_approx_mult_bits)
+        scale, _, _ = approx_scale_as_mult_and_shift(scale, scale_approx_mult_bits)
 
     return scale, zp
 
@@ -205,7 +205,7 @@ class QuantSettings(object):
                ' ; per_channel={})'.format(self.num_bits, _enum_to_str(self.quant_mode),
                                            _enum_to_str(self.clip_mode), self.clip_n_stds, self.clip_half_range,
                                            self.per_channel
-        )
+                                           )
 
 
 def linear_quantize_clamp_with_metadata(t, inplace=False):
@@ -238,8 +238,8 @@ def add_post_train_quant_args(argparser):
                                          '("post-training quantization")')
     exc_group = group.add_mutually_exclusive_group()
     exc_group.add_argument('--quantize-eval', '--qe', action='store_true',
-                       help='Apply linear quantization to model before evaluation. Applicable only if '
-                            '--evaluate is also set')
+                           help='Apply linear quantization to model before evaluation. Applicable only if '
+                           '--evaluate is also set')
     exc_group.add_argument('--qe-calibration', type=distiller.utils.float_range_argparse_checker(exc_min=True),
                            metavar='PORTION_OF_TEST_SET',
                            help='Run the model in evaluation mode on the specified portion of the test dataset and '
@@ -385,7 +385,7 @@ class RangeLinearQuantWrapper(nn.Module):
             for input in inputs:
                 qmd = input.quant_metadata
                 input.quant_metadata = TensorQuantMetadata(qmd.scale.to(device), qmd.zero_point.to(device),
-                                                                        qmd.min_q_val, qmd.max_q_val)
+                                                           qmd.min_q_val, qmd.max_q_val)
                 input_q = linear_quantize_clamp_with_metadata(input)
                 input_q.quant_metadata = input.quant_metadata
                 inputs_q.append(input_q)
@@ -553,6 +553,7 @@ class RangeLinearQuantParamLayerWrapper(RangeLinearQuantWrapper):
         clip_half_range (bool) : See RangeLinearQuantWrapper
         scale_approx_mult_bits (int): See RangeLinearQuantWrapper
     """
+
     def __init__(self, wrapped_module, num_bits_acts, num_bits_params, num_bits_accum=32,
                  mode=LinearQuantMode.SYMMETRIC, clip_acts=ClipMode.NONE, per_channel_wts=False, activation_stats=None,
                  clip_n_stds=None, clip_half_range=False, scale_approx_mult_bits=None,
@@ -597,7 +598,7 @@ class RangeLinearQuantParamLayerWrapper(RangeLinearQuantWrapper):
 
         # Quantize bias
         self.has_bias = hasattr(wrapped_module, 'bias') and wrapped_module.bias is not None
-        if self.has_bias and not self.preset_act_stats:
+        if self.has_bias:  # and not self.preset_act_stats:
             b_scale, b_zero_point = _get_quant_params_from_tensor(wrapped_module.bias,
                                                                   self.wts_quant_settings.num_bits,
                                                                   self.wts_quant_settings.quant_mode)
@@ -619,7 +620,7 @@ class RangeLinearQuantParamLayerWrapper(RangeLinearQuantWrapper):
         if self.is_simulated_quant_weight_shifted:
             # We want to return the weights to their integer representation:
             self.wrapped_module.weight.data -= self.w_zero_point
-            self.is_simulated_quant_weight_shifted.sub_(1) # i.e. is_simulated_quant_weight_shifted = False
+            self.is_simulated_quant_weight_shifted.sub_(1)  # i.e. is_simulated_quant_weight_shifted = False
         return super(RangeLinearQuantParamLayerWrapper, self).state_dict(destination, prefix, keep_vars)
 
     def quantized_forward(self, input_q):
@@ -630,10 +631,10 @@ class RangeLinearQuantParamLayerWrapper(RangeLinearQuantWrapper):
             if self.wts_quant_settings.per_channel:
                 accum_scale = accum_scale.squeeze(dim=-1)
             if self.scale_approx_mult_bits:
-                accum_scale = approx_scale_as_mult_and_shift(accum_scale, self.scale_approx_mult_bits)
+                accum_scale, _, _ = approx_scale_as_mult_and_shift(accum_scale, self.scale_approx_mult_bits)
             return accum_scale
 
-        if self.preset_act_stats:
+        if False:  # self.preset_act_stats:
             if self.num_forwards == 0:
                 self.accum_scale += get_accum_scale(input_q)
                 if self.has_bias:
@@ -646,7 +647,8 @@ class RangeLinearQuantParamLayerWrapper(RangeLinearQuantWrapper):
                 # Re-quantize bias to match x * w scale: b_q' = (in_scale * w_scale / b_scale) * (b_q + b_zero_point)
                 bias_requant_scale = self.accum_scale.squeeze() / self.b_scale
                 if self.scale_approx_mult_bits is not None:
-                    bias_requant_scale = approx_scale_as_mult_and_shift(bias_requant_scale, self.scale_approx_mult_bits)
+                    bias_requant_scale, _, _ = approx_scale_as_mult_and_shift(
+                        bias_requant_scale, self.scale_approx_mult_bits)
                 self.wrapped_module.bias.data = linear_quantize_clamp(self.base_b_q + self.b_zero_point,
                                                                       bias_requant_scale, 0,
                                                                       self.accum_min_q_val, self.accum_max_q_val)
@@ -686,7 +688,7 @@ class RangeLinearQuantParamLayerWrapper(RangeLinearQuantWrapper):
     def get_accum_to_output_re_quantization_params(self, output_scale, output_zero_point):
         requant_scale = output_scale / self.accum_scale
         if self.scale_approx_mult_bits is not None:
-            requant_scale = approx_scale_as_mult_and_shift(requant_scale, self.scale_approx_mult_bits)
+            requant_scale, _, _ = approx_scale_as_mult_and_shift(requant_scale, self.scale_approx_mult_bits)
         return requant_scale, output_zero_point
 
     def extra_repr(self):
@@ -725,6 +727,7 @@ class RangeLinearQuantMatmulWrapper(RangeLinearQuantWrapper):
         clip_n_stds (int): See RangeLinearQuantWrapper
         scale_approx_mult_bits (int): See RangeLinearQuantWrapper
     """
+
     def __init__(self, wrapped_module, num_bits_acts, num_bits_accum=32,
                  mode=LinearQuantMode.SYMMETRIC, clip_acts=ClipMode.NONE, activation_stats=None,
                  clip_n_stds=None, clip_half_range=False, scale_approx_mult_bits=None,
@@ -761,7 +764,7 @@ class RangeLinearQuantMatmulWrapper(RangeLinearQuantWrapper):
     def get_accum_to_output_re_quantization_params(self, output_scale, output_zero_point):
         requant_scale = output_scale / self.accum_scale
         if self.scale_approx_mult_bits is not None:
-            requant_scale = approx_scale_as_mult_and_shift(requant_scale, self.scale_approx_mult_bits)
+            requant_scale, _, _ = approx_scale_as_mult_and_shift(requant_scale, self.scale_approx_mult_bits)
         return requant_scale, output_zero_point
 
 
@@ -880,7 +883,7 @@ class RangeLinearQuantEltwiseMultWrapper(RangeLinearQuantWrapper):
     def get_accum_to_output_re_quantization_params(self, output_scale, output_zero_point):
         requant_scale = output_scale / self.accum_scale
         if self.scale_approx_mult_bits is not None:
-            requant_scale = approx_scale_as_mult_and_shift(requant_scale, self.scale_approx_mult_bits)
+            requant_scale, _, _ = approx_scale_as_mult_and_shift(requant_scale, self.scale_approx_mult_bits)
         return requant_scale, output_zero_point
 
 
@@ -895,6 +898,7 @@ class FPWrapper(nn.Module):
         return_fp32 (bool): Specifies whether the output needs
             to be converted back to fp32. Default: True.
     """
+
     def __init__(self, module: nn.Module, precision, convert_input=True, return_fp32=True):
         super(FPWrapper, self).__init__()
         precision = str(precision)
@@ -976,7 +980,7 @@ class RangeLinearFakeQuantWrapper(RangeLinearQuantWrapper):
         else:
             q_set = self.output_quant_settings
             return _get_quant_params_from_tensor(accumulator, q_set.num_bits, q_set.quant_mode, q_set.clip_mode,
-                                                 q_set.per_channel, q_set.clip_n_stds,q_set.clip_half_range,
+                                                 q_set.per_channel, q_set.clip_n_stds, q_set.clip_half_range,
                                                  self.scale_approx_mult_bits)
 
     def get_accum_to_output_re_quantization_params(self, output_scale, output_zero_point):
@@ -1033,6 +1037,7 @@ class PostTrainLinearQuantizer(Quantizer):
         If fpq_module is set, all the layers (except those overridden in `overrides`) will be converted
         to the set floating point precision, regardless of bits_activations/parameters/accum.
     """
+
     def __init__(self, model, bits_activations=8, bits_parameters=8, bits_accum=32,
                  overrides=None, mode=LinearQuantMode.SYMMETRIC, clip_acts=ClipMode.NONE,
                  per_channel_wts=False, model_activation_stats=None, fp16=False,
@@ -1128,7 +1133,8 @@ class PostTrainLinearQuantizer(Quantizer):
             if fpq_module:
                 if fake:
                     return RangeLinearFakeQuantWrapper(module, qbits_map[name].acts, mode=mode, clip_acts=clip_acts,
-                                                       activation_stats=self.model_activation_stats.get(norm_name, None),
+                                                       activation_stats=self.model_activation_stats.get(
+                                                           norm_name, None),
                                                        clip_n_stds=clip_n_stds, clip_half_range=clip_half_range,
                                                        scale_approx_mult_bits=scale_approx_mult_bits,
                                                        fpq_module=fpq_module)
@@ -1354,7 +1360,7 @@ class PostTrainLinearQuantizer(Quantizer):
         named_modules = OrderedDict(self.model.named_modules())
         model_stats = self.model_activation_stats
         for n, m in named_modules.items():
-            if (distiller.has_children(m) and not isinstance(m, SimulatedFoldedBatchNorm) )\
+            if (distiller.has_children(m) and not isinstance(m, SimulatedFoldedBatchNorm))\
                     or n not in self.adjacency_map or len(self.adjacency_map[n].successors) != 1:
                 continue
             successor = self.adjacency_map[n].successors[0]
@@ -1445,8 +1451,6 @@ class PostTrainLinearQuantizer(Quantizer):
                 param.data = param.data.to(device)
             for buffer in m.buffers():
                 buffer.data = buffer.data.to(device)
-
-
 
 
 ###############################################################################

@@ -173,7 +173,7 @@ def get_scale_approximation_params(fp32_scale, mult_bits, limit=False):
 
 def approx_scale_as_mult_and_shift(fp32_scale, mult_bits, limit=False):
     multiplier, shift_bits = get_scale_approximation_params(fp32_scale, mult_bits, limit=limit)
-    return multiplier / (2 ** shift_bits)
+    return multiplier / (2 ** shift_bits), multiplier, shift_bits
 
 
 class AciqClipper(object):
