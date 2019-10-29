@@ -647,7 +647,7 @@ class RangeLinearQuantParamLayerWrapper(RangeLinearQuantWrapper):
                 # Re-quantize bias to match x * w scale: b_q' = (in_scale * w_scale / b_scale) * (b_q + b_zero_point)
                 bias_requant_scale = self.accum_scale.squeeze() / self.b_scale
                 if self.scale_approx_mult_bits is not None:
-                    bias_requant_scale, _, _ = approx_scale_as_mult_and_shift(
+                    bias_requant_scale, _Mi, _Shift = approx_scale_as_mult_and_shift(
                         bias_requant_scale, self.scale_approx_mult_bits)
                 self.wrapped_module.bias.data = linear_quantize_clamp(self.base_b_q + self.b_zero_point,
                                                                       bias_requant_scale, 0,
